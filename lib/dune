@@ -1,0 +1,25 @@
+(library
+ (public_name forester_ocaml_plugin.forester_ocaml_plugin_impl)
+ (name forester_ocaml_plugin)
+ (modules forester_ocaml_plugin_impl)
+ (libraries
+  eio_main
+  eio.unix
+  unix
+  forester.compiler)
+)
+
+(plugin
+ (name forester_ocaml_plugin)
+ (libraries forester_ocaml_plugin.forester_ocaml_plugin_impl)
+ (site
+  (forester plugins)))
+
+;; TODO: copy toploop binaries to site
+
+(install
+ (section
+  (site
+   (forester theme)))
+ (files
+  (glob_files_rec theme/*)))

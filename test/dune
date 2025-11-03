@@ -1,0 +1,5 @@
+(test
+ (name test_forester_ocaml_plugin)
+ (libraries forester_ocaml_plugin compiler-libs.toplevel)
+ (modes byte)
+)

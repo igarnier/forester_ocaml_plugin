@@ -1,0 +1,5 @@
+(executable
+  (name forester_ocaml_plugin_server)
+  (libraries eio_main eio.unix unix compiler-libs.toplevel forester.compiler)
+  (modes byte)
+)
