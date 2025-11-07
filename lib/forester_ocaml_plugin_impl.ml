@@ -49,7 +49,7 @@ let plugin : Forester_compiler.Plugin.plugin =
       with End_of_file ->
         traceln "End_of_file caught - continuing" ;
         Forester_core.(
-          Reporter.fatal Reporter.Message.Plugin_step_error "End_of_file")
+          Reporter.fatal (Reporter.Message.Plugin_step_error "End_of_file"))
   end)
 
 let () = Forester_compiler.Plugin.register "ocaml" plugin
