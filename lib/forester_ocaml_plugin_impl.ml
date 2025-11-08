@@ -17,13 +17,15 @@ let write_string write msg =
   Write.BE.uint64 write len ;
   Write.string write msg
 
+let port = 0x31001
+
 let plugin : Forester_compiler.Plugin.plugin =
   fun (env, sw) ->
   let net = Eio.Stdenv.net env in
   let step_arity = 1 in
-  let addr = `Tcp (Eio.Net.Ipaddr.V4.loopback, 8080) in
+  let addr = `Tcp (Eio.Net.Ipaddr.V4.loopback, port) in
   let proc_mgr = Eio.Stdenv.process_mgr env in
-  let _ = Eio.Process.spawn ~sw proc_mgr [binary_name] in
+  let _ = Eio.Process.spawn ~sw ~stdout:env#stdout proc_mgr [binary_name; string_of_int port] in
   (* TODO: switch per step but need some notion of session id so that the server can track state
      OR fork a server per plugin instance
   *)
