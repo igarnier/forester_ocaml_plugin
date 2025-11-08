@@ -2,12 +2,12 @@ open Eio.Std
 module T = Forester_core.Types
 module V = Forester_core.Value
 
-let addr = `Tcp (Eio.Net.Ipaddr.V4.loopback, 8080)
-
 module Read = Eio.Buf_read
 module Write = Eio.Buf_write
 
 let traceln fmt = traceln ("ocaml plugin: " ^^ fmt)
+
+let binary_name = "forester_ocaml_plugin_server"
 
 let read_string =
   Read.bind Read.BE.uint64 @@ fun size -> Read.take (Int64.to_int size)
@@ -18,9 +18,12 @@ let write_string write msg =
   Write.string write msg
 
 let plugin : Forester_compiler.Plugin.plugin =
-  fun env ->
+  fun (env, sw) ->
   let net = Eio.Stdenv.net env in
   let step_arity = 1 in
+  let addr = `Tcp (Eio.Net.Ipaddr.V4.loopback, 8080) in
+  let proc_mgr = Eio.Stdenv.process_mgr env in
+  let _ = Eio.Process.spawn ~sw proc_mgr [binary_name] in
   (* TODO: switch per step but need some notion of session id so that the server can track state
      OR fork a server per plugin instance
   *)
@@ -29,7 +32,7 @@ let plugin : Forester_compiler.Plugin.plugin =
       match args with
       | [V.Content (T.Content [T.Text text])] -> (
           traceln "@[<v 2>%s@]" text ;
-          try Switch.run ~name:"client" @@ fun sw ->
+          try
             traceln "Connecting to server at %a..." Eio.Net.Sockaddr.pp addr ;
             let flow = Eio.Net.connect ~sw net addr in
             Write.with_flow flow @@ fun to_server ->

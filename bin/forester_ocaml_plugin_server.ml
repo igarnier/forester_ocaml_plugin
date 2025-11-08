@@ -20,7 +20,7 @@ let capture_stdout temp_file_name f =
   (res, contents)
 
 (* Prefix all trace output with "server: " *)
-let traceln fmt = traceln ("server: " ^^ fmt)
+let traceln fmt = traceln ("forester_ocaml_plugin_server: " ^^ fmt)
 
 module Read = Eio.Buf_read
 module Write = Eio.Buf_write
@@ -98,8 +98,9 @@ let handle_client flow addr =
     loop ()
   in
   let () = Toploop.initialize_toplevel_env () in
-  try loop ()
-  with End_of_file -> traceln "%a: end of input" Eio.Net.Sockaddr.pp addr
+  try loop () with
+  | End_of_file -> traceln "end of input" 
+  | exn -> traceln "unhandled exception (%s)" (Printexc.to_string exn)
 
 (* Accept incoming client connections on [socket].
    We can handle multiple clients at the same time.
@@ -111,13 +112,30 @@ let run socket =
     ~on_error:(traceln "Error handling connection: %a" Fmt.exn)
     ~max_connections:1
 
-let addr = `Tcp (Eio.Net.Ipaddr.V4.loopback, 8080)
+let usage () =
+  Format.eprintf "usage: `forester_ocaml_plugin_server <port number>`@."
 
 let () =
-  Eio_main.run @@ fun env ->
-  let net = Eio.Stdenv.net env in
-  Switch.run ~name:"server" @@ fun sw ->
-  let listening_socket =
-    Eio.Net.listen net ~sw ~reuse_addr:true ~backlog:1 addr
-  in
-  run listening_socket
+  match Array.to_list Sys.argv with
+  | [] | [_] | _ :: _ :: _ :: _ ->
+    Format.eprintf "forester_ocaml_plugin_server: invalid invocation, exiting@." ;
+    usage () ;
+    exit 1
+  | [_; port] ->
+    let error () =
+      Format.eprintf "forester_ocaml_plugin_server: '%s' is not a valid port, exiting@." port ;
+      usage () ;
+      exit 1
+    in
+    match int_of_string port with
+    | exception (Failure _) -> error ()
+    | i when i <= 0 -> error ()
+    | port ->
+      let addr = `Tcp (Eio.Net.Ipaddr.V4.loopback, port) in
+      Eio_main.run @@ fun env ->
+      let net = Eio.Stdenv.net env in
+      Switch.run ~name:"server" @@ fun sw ->
+      let listening_socket =
+        Eio.Net.listen net ~sw ~reuse_addr:true ~backlog:1 addr
+      in
+      run listening_socket
