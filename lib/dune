@@ -6,6 +6,8 @@
   eio_main
   eio.unix
   unix
+  forester.frontend
+  forester.core
   forester.compiler)
 )
 

@@ -1,6 +1,7 @@
 open Eio.Std
 module T = Forester_core.Types
 module V = Forester_core.Value
+module DSL = Forester_frontend.DSL
 module Read = Eio.Buf_read
 module Write = Eio.Buf_write
 
@@ -27,10 +28,33 @@ let next_port () =
 
 let text_content str = T.Content [T.Text str]
 
+let code_block (snippet : string) (stdout : string) (output : string) =
+  let open DSL in
+  p (pre [(txt snippet)] ::
+     pre [(txt output)] ::
+     (if (String.length (String.trim stdout) = 0) then
+        []
+      else
+        [pre [(txt stdout)]]
+     )
+    )
+
 let redirect (sw : Eio.Switch.t) src dst =
   Eio.Fiber.fork_daemon ~sw (fun () ->
       Eio.Flow.copy src dst ;
       `Stop_daemon)
+
+let fork_server env sw sink port =
+  Eio.Fiber.fork_daemon ~sw (fun () ->
+      let proc_mgr = Eio.Stdenv.process_mgr env in
+      ignore
+      @@ Eio.Process.spawn
+           ~sw
+           ~stdout:sink
+           proc_mgr
+           [binary_name; string_of_int port] ;
+      `Stop_daemon) ;
+  traceln "Started server on port %d" port
 
 let plugin : Forester_compiler.Plugin.plugin =
  fun (env, sw) ->
@@ -42,18 +66,11 @@ let plugin : Forester_compiler.Plugin.plugin =
   let addr = `Tcp (Eio.Net.Ipaddr.V4.loopback, port) in
   (* Spawn server for this instance *)
   let (server_stdout, sink) = Eio_unix.pipe sw in
-  Eio.Fiber.fork_daemon ~sw (fun () ->
-      let proc_mgr = Eio.Stdenv.process_mgr env in
-      ignore
-      @@ Eio.Process.spawn
-           ~sw
-           ~stdout:sink
-           proc_mgr
-           [binary_name; string_of_int port] ;
-      `Stop_daemon) ;
-  traceln "Started server on port %d" port ;
+  fork_server env sw sink port ;
   let from_server_pipe = Read.of_flow ~max_size:512 server_stdout in
   begin
+    (* Read greeting from server. This also allows to syncronize with the server.
+       TODO: simpler sync mechanism. *)
     try Read.string "forester_ocaml_plugin_server: starting" from_server_pipe
     with Failure _ | End_of_file ->
       Forester_core.(
@@ -61,7 +78,6 @@ let plugin : Forester_compiler.Plugin.plugin =
           (Reporter.Message.Plugin_initialization_error
              (text_content "ocaml plugin: unexpected greeting from server")))
   end ;
-
   traceln "Received server greeting - plugin initialization successful" ;
 
   (* Redirect rest of server stdout to Forester's stdout *)
@@ -82,9 +98,8 @@ let plugin : Forester_compiler.Plugin.plugin =
           let from_server = Read.of_flow flow ~max_size:32768 in
           let captured_stdout = read_string from_server in
           let output = read_string from_server in
-          traceln "got answer from server" ;
           Result.ok
-            (V.Content (T.Content [T.Text captured_stdout; T.Text output]))
+            (V.Content (T.Content [(code_block text captured_stdout output)]))
         with End_of_file ->
           traceln "End_of_file caught - continuing" ;
           Result.ok (V.Content (T.Content [T.Text "End_of_file"])))
