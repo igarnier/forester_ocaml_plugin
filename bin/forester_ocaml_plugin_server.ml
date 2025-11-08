@@ -70,14 +70,15 @@ let write_string write msg =
 
 (* Read one line from [client] and respond with "OK". *)
 let handle_client flow addr =
-  traceln "Accepted connection from %a" Eio.Net.Sockaddr.pp addr ;
   let temp_file_name = Filename.temp_file "forester-ocaml-plugin-" ".tmp" in
+
+  let () = Toploop.initialize_toplevel_env () in
+
+  traceln "Accepted connection from %a" Eio.Net.Sockaddr.pp addr ;
   traceln "Using %s as temp file" temp_file_name ;
-  (* We use a buffered reader because we may need to combine multiple reads
-     to get a single line (or we may get multiple lines in a single read,
-     although here we only use the first one). *)
-  let from_client = Read.of_flow flow ~max_size:32768 in
+
   let rec loop () =
+    let from_client = Read.of_flow flow ~max_size:32768 in
     let input = read_string from_client in
     traceln "processing: %S" input ;
     begin
@@ -97,9 +98,8 @@ let handle_client flow addr =
     end ;
     loop ()
   in
-  let () = Toploop.initialize_toplevel_env () in
   try loop () with
-  | End_of_file -> traceln "end of input" 
+  | End_of_file -> traceln "end of input"
   | exn -> traceln "unhandled exception (%s)" (Printexc.to_string exn)
 
 (* Accept incoming client connections on [socket].
@@ -118,24 +118,31 @@ let usage () =
 let () =
   match Array.to_list Sys.argv with
   | [] | [_] | _ :: _ :: _ :: _ ->
-    Format.eprintf "forester_ocaml_plugin_server: invalid invocation, exiting@." ;
-    usage () ;
-    exit 1
-  | [_; port] ->
-    let error () =
-      Format.eprintf "forester_ocaml_plugin_server: '%s' is not a valid port, exiting@." port ;
+      Format.eprintf
+        "forester_ocaml_plugin_server: invalid invocation, exiting@." ;
       usage () ;
       exit 1
-    in
-    match int_of_string port with
-    | exception (Failure _) -> error ()
-    | i when i <= 0 -> error ()
-    | port ->
-      let addr = `Tcp (Eio.Net.Ipaddr.V4.loopback, port) in
-      Eio_main.run @@ fun env ->
-      let net = Eio.Stdenv.net env in
-      Switch.run ~name:"server" @@ fun sw ->
-      let listening_socket =
-        Eio.Net.listen net ~sw ~reuse_addr:true ~backlog:1 addr
+  | [_; port] -> (
+      let error () =
+        Format.eprintf
+          "forester_ocaml_plugin_server: '%s' is not a valid port, exiting@."
+          port ;
+        usage () ;
+        exit 1
       in
-      run listening_socket
+      match int_of_string port with
+      | exception Failure _ -> error ()
+      | i when i <= 0 -> error ()
+      | port ->
+          let addr = `Tcp (Eio.Net.Ipaddr.V4.loopback, port) in
+          Eio_main.run @@ fun env ->
+          let net = Eio.Stdenv.net env in
+          Switch.run ~name:"server" @@ fun sw ->
+          let listening_socket =
+            Eio.Net.listen net ~sw ~reuse_addr:true ~backlog:1 addr
+          in
+          let greeting = "forester_ocaml_plugin_server: starting" in
+          Write.with_flow env#stdout @@ fun stdout ->
+          Write.string stdout greeting ;
+          (* Start processing *)
+          run listening_socket)
