@@ -2,7 +2,7 @@
 opam-version: "2.0"
 synopsis: "Run OCaml code in Forester"
 description: "A plugin to execute and render snippets of OCaml in Forester"
-maintainer: ["Maintainer Name <igarnier@protonmail.com>"]
+maintainer: ["Ilias Garnier <igarnier@protonmail.com>"]
 authors: ["Ilias Garnier <igarnier@protonmail.com>"]
 license: "MIT"
 tags: ["forester" "plugin"]

@@ -18,17 +18,18 @@ let write_string write msg =
   Write.string write msg
 
 let plugin : Forester_compiler.Plugin.plugin =
- fun env ->
+  fun env ->
   let net = Eio.Stdenv.net env in
-  (module struct
-    let step_arity = 1
-
-    let step sw : Forester_compiler.Plugin.step =
-     fun (args : V.t list) ->
+  let step_arity = 1 in
+  (* TODO: switch per step but need some notion of session id so that the server can track state
+     OR fork a server per plugin instance
+  *)
+  let step : Forester_compiler.Plugin.step =
+    fun (args : V.t list) ->
       match args with
       | [V.Content (T.Content [T.Text text])] -> (
           traceln "@[<v 2>%s@]" text ;
-          try
+          try Switch.run ~name:"client" @@ fun sw ->
             traceln "Connecting to server at %a..." Eio.Net.Sockaddr.pp addr ;
             let flow = Eio.Net.connect ~sw net addr in
             Write.with_flow flow @@ fun to_server ->
@@ -42,14 +43,10 @@ let plugin : Forester_compiler.Plugin.plugin =
             traceln "End_of_file caught - continuing" ;
             Result.ok (V.Content (T.Content [T.Text "End_of_file"])))
       | _ -> Result.error ""
-
-    let scope : type a. (Forester_compiler.Plugin.step -> a) -> a =
-     fun f ->
-      try Switch.run ~name:"client" @@ fun sw -> f (step sw)
-      with End_of_file ->
-        traceln "End_of_file caught - continuing" ;
-        Forester_core.(
-          Reporter.fatal (Reporter.Message.Plugin_step_error "End_of_file"))
-  end)
+  in
+  {
+    step_arity;
+    step
+  }
 
 let () = Forester_compiler.Plugin.register "ocaml" plugin

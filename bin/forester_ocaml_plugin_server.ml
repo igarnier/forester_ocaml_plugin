@@ -1,8 +1,7 @@
 open Eio.Std
 
 (*
-  TOOD: may have to split it into independent library so that the client part can be compiled in native code
-  and the server part in bytecode
+   TODO: use native toplevel (look at how ocamlnat initializes it)
 *)
 
 let capture_stdout temp_file_name f =

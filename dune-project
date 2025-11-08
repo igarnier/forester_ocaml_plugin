@@ -10,7 +10,7 @@
 
 (authors "Ilias Garnier <igarnier@protonmail.com>")
 
-(maintainers "Maintainer Name <igarnier@protonmail.com>")
+(maintainers "Ilias Garnier <igarnier@protonmail.com>")
 
 (license MIT)
 
@@ -25,5 +25,3 @@
    (forester (= "5.0")))
  (tags
   ("forester" "plugin")))
-
-; See the complete stanza docs at https://dune.readthedocs.io/en/stable/reference/dune-project/index.html
