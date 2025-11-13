@@ -30,13 +30,11 @@ let text_content str = T.Content [T.Text str]
 
 let code_block (snippet : string) (stdout : string) (output : string) =
   let open DSL in
-  p (pre [(txt snippet)] ::
-     pre [(txt output)] ::
-     (if (String.length (String.trim stdout) = 0) then
-        []
-      else
-        [pre [(txt stdout)]]
-     )
+  p
+    (pre [txt snippet]
+    :: pre [txt output]
+    ::
+    (if String.length (String.trim stdout) = 0 then [] else [pre [txt stdout]])
     )
 
 let redirect (sw : Eio.Switch.t) src dst =
@@ -91,7 +89,6 @@ let plugin : Forester_compiler.Plugin.plugin =
    fun (args : V.t list) ->
     match args with
     | [V.Content (T.Content [T.Text text])] -> (
-        traceln "@[<v 2>%s@]" text ;
         try
           Write.with_flow flow @@ fun to_server ->
           write_string to_server text ;
@@ -99,7 +96,7 @@ let plugin : Forester_compiler.Plugin.plugin =
           let captured_stdout = read_string from_server in
           let output = read_string from_server in
           Result.ok
-            (V.Content (T.Content [(code_block text captured_stdout output)]))
+            (V.Content (T.Content [code_block text captured_stdout output]))
         with End_of_file ->
           traceln "End_of_file caught - continuing" ;
           Result.ok (V.Content (T.Content [T.Text "End_of_file"])))

@@ -80,26 +80,22 @@ let handle_client flow addr =
   let rec loop () =
     let from_client = Read.of_flow flow ~max_size:32768 in
     let input = read_string from_client in
-    traceln "processing: %S" input ;
     begin
       Write.with_flow flow @@ fun writer ->
       match execute_phrase temp_file_name input with
       | Error msg ->
-          traceln "error: %S@." msg ;
           let stdout = "" in
           let output = Format.asprintf "failed to execute phrase: %s" msg in
           write_string writer stdout ;
           write_string writer output
       | Ok { stdout; output; success = _ } ->
           write_string writer stdout ;
-          traceln "stdout: %S@." stdout ;
-          write_string writer output ;
-          traceln "output: %S@." output
+          write_string writer output
     end ;
     loop ()
   in
   try loop () with
-  | End_of_file -> traceln "end of input"
+  | End_of_file -> ()
   | exn -> traceln "unhandled exception (%s)" (Printexc.to_string exn)
 
 (* Accept incoming client connections on [socket].
