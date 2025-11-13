@@ -100,7 +100,12 @@ let plugin : Forester_compiler.Plugin.plugin =
         with End_of_file ->
           traceln "End_of_file caught - continuing" ;
           Result.ok (V.Content (T.Content [T.Text "End_of_file"])))
-    | _ -> Result.error ""
+    | _ ->
+        Format.kasprintf
+          Result.error
+          "Unhandled values: %a"
+          (Fmt.Dump.list Forester_core.Value.pp)
+          args
   in
   { step_arity; step }
 
