@@ -28,14 +28,26 @@ let next_port () =
 
 let text_content str = T.Content [T.Text str]
 
-let code_block (snippet : string) (stdout : string) (output : string) =
+let none_if_whitespace str =
+  let str = String.trim str in
+  if String.length str = 0 then None else Some str
+
+let code_block (snippet : string) (stdout : string option) (output : string option) =
   let open DSL in
-  p
-    (pre [txt snippet]
-    :: pre [txt output]
-    ::
-    (if String.length (String.trim stdout) = 0 then [] else [pre [txt stdout]])
-    )
+  let maybe_stdout =
+    Option.bind stdout @@ fun stdout ->
+    Option.bind (none_if_whitespace stdout) @@ fun stdout ->
+    Option.some (pre [txt stdout])
+  in
+  let maybe_output =
+    Option.map (fun output -> pre [txt output]) output
+  in
+  let blocks =
+    [pre [txt (String.trim snippet)]]
+    @ (Option.to_list maybe_output)
+    @ (Option.to_list maybe_stdout)
+  in
+  p blocks
 
 let redirect (sw : Eio.Switch.t) src dst =
   Eio.Fiber.fork_daemon ~sw (fun () ->
@@ -57,7 +69,7 @@ let fork_server env sw sink port =
 let plugin : Forester_compiler.Plugin.plugin =
  fun (env, sw) ->
   let net = Eio.Stdenv.net env in
-  let step_arity = 1 in
+  let step_arity = 2 in
   (* Each instance gets a fresh port.
      Ideally we'd ask the OS for one but not clear how to do so in a portable way. *)
   let port = next_port () in
@@ -67,8 +79,7 @@ let plugin : Forester_compiler.Plugin.plugin =
   fork_server env sw sink port ;
   let from_server_pipe = Read.of_flow ~max_size:512 server_stdout in
   begin
-    (* Read greeting from server. This also allows to syncronize with the server.
-       TODO: simpler sync mechanism. *)
+    (* Read greeting from server. This also allows to synchronize with the server. *)
     try Read.string "forester_ocaml_plugin_server: starting" from_server_pipe
     with Failure _ | End_of_file ->
       Forester_core.(
@@ -84,19 +95,39 @@ let plugin : Forester_compiler.Plugin.plugin =
   traceln "Connecting to server at %a..." Eio.Net.Sockaddr.pp addr ;
   let flow = Eio.Net.connect ~sw net addr in
 
+  let parse_options opt =
+    match opt with
+    | V.Content (T.Content []) -> (false, false)
+    | V.Content (T.Content [T.Text text]) ->
+      let opts = String.split_on_char ',' text in
+      let no_stdout = List.mem "no-stdout" opts in
+      let no_echo = List.mem "no-echo" opts in
+      (no_stdout, no_echo)
+    | _ ->
+      traceln "Expected option formatted as text content, got %a"
+        Forester_core.Value.pp opt ;
+      (false, false)
+  in
+
   (* Before trying to connect, wait on server startup to finish. *)
   let step : Forester_compiler.Plugin.step =
    fun (args : V.t list) ->
     match args with
-    | [V.Content (T.Content [T.Text text])] -> (
+    | [opt; V.Content (T.Content [T.Text text])] -> (
+        let no_stdout, no_echo = parse_options opt in
         try
           Write.with_flow flow @@ fun to_server ->
           write_string to_server text ;
           let from_server = Read.of_flow flow ~max_size:32768 in
           let captured_stdout = read_string from_server in
           let output = read_string from_server in
-          Result.ok
-            (V.Content (T.Content [code_block text captured_stdout output]))
+          let code_block =
+            code_block
+              text
+              (if no_stdout then None else Some captured_stdout)
+              (if no_echo then None else Some output)
+          in
+          Result.ok (V.Content (T.Content [code_block]))
         with End_of_file ->
           traceln "End_of_file caught - continuing" ;
           Result.ok (V.Content (T.Content [T.Text "End_of_file"])))
