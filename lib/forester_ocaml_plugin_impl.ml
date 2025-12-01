@@ -1,11 +1,12 @@
-open Eio.Std
 module T = Forester_core.Types
 module V = Forester_core.Value
 module DSL = Forester_frontend.DSL
 module Read = Eio.Buf_read
 module Write = Eio.Buf_write
 
-let traceln fmt = traceln ("ocaml plugin: " ^^ fmt)
+let log to_logfile str =
+  Write.string to_logfile str ;
+  Write.string to_logfile "\n"
 
 let binary_name = "forester_ocaml_plugin_server"
 
@@ -28,7 +29,7 @@ let next_port () =
 
 let text_content str = T.Content [T.Text str]
 
-let none_if_whitespace str =
+let trim_opt str =
   let str = String.trim str in
   if String.length str = 0 then None else Some str
 
@@ -36,7 +37,7 @@ let code_block (snippet : string) (stdout : string option) (output : string opti
   let open DSL in
   let maybe_stdout =
     Option.bind stdout @@ fun stdout ->
-    Option.bind (none_if_whitespace stdout) @@ fun stdout ->
+    Option.bind (trim_opt stdout) @@ fun stdout ->
     Option.some (pre [txt stdout])
   in
   let maybe_output =
@@ -49,34 +50,42 @@ let code_block (snippet : string) (stdout : string option) (output : string opti
   in
   p blocks
 
-let redirect (sw : Eio.Switch.t) src dst =
+let redirect (sw : Eio.Switch.t) stdout stderr dst =
   Eio.Fiber.fork_daemon ~sw (fun () ->
-      Eio.Flow.copy src dst ;
+      Eio.Std.Fiber.both
+        (fun () -> Eio.Flow.copy stdout dst)
+        (fun () -> Eio.Flow.copy stderr dst) ;
       `Stop_daemon)
 
-let fork_server env sw sink port =
+let fork_server logger env sw ~stdout ~stderr port =
   Eio.Fiber.fork_daemon ~sw (fun () ->
       let proc_mgr = Eio.Stdenv.process_mgr env in
       ignore
       @@ Eio.Process.spawn
            ~sw
-           ~stdout:sink
+           ~stdout
+           ~stderr
            proc_mgr
            [binary_name; string_of_int port] ;
       `Stop_daemon) ;
-  traceln "Started server on port %d" port
+  logger (Printf.sprintf "Started server on port %d" port)
 
 let plugin : Forester_compiler.Plugin.plugin =
  fun (env, sw) ->
+  (* Open log file *)
+  let path = Eio.Path.(Eio.Stdenv.cwd env / "forester_ocaml_plugin.log") in
+  let log_flow = Eio.Path.open_out ~sw ~append:true ~create:(`If_missing 0o644) path in
+  Write.with_flow log_flow @@ fun log_writer ->
+  let logger = log log_writer in
   let net = Eio.Stdenv.net env in
-  let step_arity = 2 in
   (* Each instance gets a fresh port.
      Ideally we'd ask the OS for one but not clear how to do so in a portable way. *)
   let port = next_port () in
   let addr = `Tcp (Eio.Net.Ipaddr.V4.loopback, port) in
   (* Spawn server for this instance *)
-  let (server_stdout, sink) = Eio_unix.pipe sw in
-  fork_server env sw sink port ;
+  let (server_stdout, stdout) = Eio_unix.pipe sw in
+  let (server_stderr, stderr) = Eio_unix.pipe sw in
+  fork_server logger env sw ~stdout ~stderr port ;
   let from_server_pipe = Read.of_flow ~max_size:512 server_stdout in
   begin
     (* Read greeting from server. This also allows to synchronize with the server. *)
@@ -87,12 +96,12 @@ let plugin : Forester_compiler.Plugin.plugin =
           (Reporter.Message.Plugin_initialization_error
              (text_content "ocaml plugin: unexpected greeting from server")))
   end ;
-  traceln "Received server greeting - plugin initialization successful" ;
+  logger "Received server greeting - plugin initialization successful" ;
 
-  (* Redirect rest of server stdout to Forester's stdout *)
-  redirect sw server_stdout env#stdout ;
+  (* Redirect rest of server stdout to logfile *)
+  redirect sw server_stdout server_stderr log_flow ;
 
-  traceln "Connecting to server at %a..." Eio.Net.Sockaddr.pp addr ;
+  logger @@ Format.asprintf "Connecting to server at %a..." Eio.Net.Sockaddr.pp addr ;
   let flow = Eio.Net.connect ~sw net addr in
 
   let parse_options opt =
@@ -104,7 +113,7 @@ let plugin : Forester_compiler.Plugin.plugin =
       let no_echo = List.mem "no-echo" opts in
       (no_stdout, no_echo)
     | _ ->
-      traceln "Expected option formatted as text content, got %a"
+      logger @@ Format.asprintf "Expected option formatted as text content, got %a"
         Forester_core.Value.pp opt ;
       (false, false)
   in
@@ -120,6 +129,7 @@ let plugin : Forester_compiler.Plugin.plugin =
           write_string to_server text ;
           let from_server = Read.of_flow flow ~max_size:32768 in
           let captured_stdout = read_string from_server in
+          let captured_stderr = read_string from_server in
           let output = read_string from_server in
           let code_block =
             code_block
@@ -127,9 +137,14 @@ let plugin : Forester_compiler.Plugin.plugin =
               (if no_stdout then None else Some captured_stdout)
               (if no_echo then None else Some output)
           in
+          if String.length captured_stderr <> 0 then
+            begin
+              Format.printf "forester_ocaml_plugin: while processing \"%s\"" text;
+              Format.printf "forester_ocaml_plugin: stderr = \"%s\"" captured_stderr
+            end;
           Result.ok (V.Content (T.Content [code_block]))
         with End_of_file ->
-          traceln "End_of_file caught - continuing" ;
+          logger "End_of_file caught - continuing" ;
           Result.ok (V.Content (T.Content [T.Text "End_of_file"])))
     | _ ->
         Format.kasprintf
@@ -138,6 +153,6 @@ let plugin : Forester_compiler.Plugin.plugin =
           (Fmt.Dump.list Forester_core.Value.pp)
           args
   in
-  { step_arity; step }
+  { Forester_compiler.Plugin.step_arity = 2; step }
 
 let () = Forester_compiler.Plugin.register "ocaml" plugin
