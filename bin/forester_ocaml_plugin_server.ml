@@ -162,6 +162,12 @@ let handle_client flow addr =
     (* Add findlib path so Topfind is available and it won't be
      initialized twice if the user does [#use "topfind"]. *)
     Topdirs.dir_directory (Findlib.package_directory "findlib") ;
+    (* Load system init files. *)
+    (match
+       try Some (Sys.getenv "OCAML_TOPLEVEL_PATH") with Not_found -> None
+     with
+    | Some dir -> Topdirs.dir_directory dir
+    | None -> ()) ;
 
     Toploop.add_directive
       "require"
