@@ -4,24 +4,116 @@ open Eio.Std
    TODO: use native toplevel (look at how ocamlnat initializes it)
 *)
 
+module Capture : sig
+  type t
 
-let capture_fd fd temp_file_name f =
-  let temp_file_fd =
-    Unix.openfile temp_file_name [O_RDWR; O_CREAT; O_TRUNC] 0o640
-  in
-  let fd_copy = Unix.dup fd in
-  (* Let stdout point to temp file *)
-  Unix.dup2 temp_file_fd fd ;
-  let res = f () in
-  Format.print_flush () ;
-  Unix.fsync temp_file_fd ;
-  Unix.dup2 fd_copy fd ;
-  ignore (Unix.lseek temp_file_fd 0 SEEK_SET) ;
-  let contents = In_channel.input_all (Unix.in_channel_of_descr temp_file_fd) in
-  (res, contents)
+  type 'a with_captured = { stdout : string; stderr : string; outcome : 'a }
 
-let capture_stdout stdout_tmp_file_name f = capture_fd Unix.stdout stdout_tmp_file_name f
-let capture_stderr stderr_tmp_file_name f = capture_fd Unix.stderr stderr_tmp_file_name f
+  val create : unit -> t
+
+  val capture : t -> (unit -> 'a) -> 'a with_captured
+end = struct
+  type t = { stdout_tmp_file : string; stderr_tmp_file : string }
+
+  type 'a with_captured = { stdout : string; stderr : string; outcome : 'a }
+
+  let capture_fd fd temp_file_name f =
+    let temp_file_fd = Unix.openfile temp_file_name [O_RDWR; O_CREAT; O_TRUNC] 0o640 in
+    let fd_copy = Unix.dup fd in
+    (* Let stdout point to temp file *)
+    Unix.dup2 temp_file_fd fd ;
+    let res = f () in
+    Format.print_flush () ;
+    Unix.fsync temp_file_fd ;
+    Unix.dup2 fd_copy fd ;
+    ignore (Unix.lseek temp_file_fd 0 SEEK_SET) ;
+    let contents = In_channel.input_all (Unix.in_channel_of_descr temp_file_fd) in
+    (res, contents)
+
+  let capture_stdout stdout_tmp_file_name f =
+    capture_fd Unix.stdout stdout_tmp_file_name f
+
+  let capture_stderr stderr_tmp_file_name f =
+    capture_fd Unix.stderr stderr_tmp_file_name f
+
+  let create () =
+    let stdout_tmp_file = Filename.temp_file "forester-ocaml-plugin-stdout" ".tmp" in
+    let stderr_tmp_file = Filename.temp_file "forester-ocaml-plugin-stderr" ".tmp" in
+    { stdout_tmp_file; stderr_tmp_file }
+
+  let capture { stdout_tmp_file; stderr_tmp_file } f =
+    let ((outcome, stderr), stdout) =
+      capture_stdout stdout_tmp_file @@ fun () ->
+      capture_stderr stderr_tmp_file @@ fun () -> f ()
+    in
+    { stdout; stderr; outcome }
+end
+
+module REPL = struct
+  (* code taken from Utop *)
+  let split_words str =
+    let len = String.length str in
+    let is_sep = function ' ' | '\t' | '\r' | '\n' | ',' -> true | _ -> false in
+    let rec skip acc i =
+      if i = len then acc
+      else if is_sep str.[i] then skip acc (i + 1)
+      else extract acc i (i + 1)
+    and extract acc i j =
+      if j = len then String.sub str i (j - i) :: acc
+      else if is_sep str.[j] then skip (String.sub str i (j - i) :: acc) (j + 1)
+      else extract acc i (j + 1)
+    in
+    List.rev (skip [] 0)
+
+  let handle_findlib_error = function
+    | Failure msg -> Result.error msg
+    | Fl_package_base.No_such_package (pkg, reason) ->
+        Printf.ksprintf
+          Result.error
+          "No such package: %s%s\n"
+          pkg
+          (if reason <> "" then " - " ^ reason else "")
+    | Fl_package_base.Package_loop pkg ->
+        Printf.ksprintf Result.error "Package requires itself: %s\n" pkg
+    | exn ->
+        Format.kasprintf
+          Result.error
+          "Exception caught during findlib invocation (%s)"
+          (Printexc.to_string exn)
+
+  let require handle packages =
+    Capture.capture handle @@ fun () ->
+    try
+      let eff_packages = Findlib.package_deep_ancestors !Topfind.predicates packages in
+      Topfind.load eff_packages ;
+      Result.ok ()
+    with exn -> handle_findlib_error exn
+
+  let parse_phrase str =
+    let lexbuf = Lexing.from_string str in
+    try Ok (!Toploop.parse_toplevel_phrase lexbuf)
+    with Syntaxerr.Error _ as e -> (
+      match Location.error_of_exn e with
+      | None -> Error "Unhandled parse error"
+      | Some (`Ok err) -> Format.kasprintf Result.error "%a" Location.print_report err
+      | Some `Already_displayed -> Error "Already displayed")
+
+  let execute_phrase handle str =
+    Capture.capture handle @@ fun () ->
+    let output_buf = Buffer.create 512 in
+    let output_fmtr = Format.formatter_of_buffer output_buf in
+    Result.bind (parse_phrase str) @@ fun toplevel_phrase ->
+    try Ok (Toploop.execute_phrase true output_fmtr toplevel_phrase, output_buf) with
+    | Typecore.Error (loc, env, err) ->
+        let report = Typecore.report_error ~loc env err in
+        Format.kasprintf Result.error "%a" Location.print_report report
+    | Env.Error err -> Format.kasprintf Result.error "%a" Env.report_error err
+    | exn ->
+        Format.kasprintf
+          Result.error
+          "Exception caught during phrase evaluation (%s)"
+          (Printexc.to_string exn)
+end
 
 (* Prefix all trace output with "server: " *)
 let traceln fmt = traceln ("forester_ocaml_plugin_server: " ^^ fmt)
@@ -29,44 +121,7 @@ let traceln fmt = traceln ("forester_ocaml_plugin_server: " ^^ fmt)
 module Read = Eio.Buf_read
 module Write = Eio.Buf_write
 
-let parse_phrase str =
-  let lexbuf = Lexing.from_string str in
-  try Ok (!Toploop.parse_toplevel_phrase lexbuf)
-  with Syntaxerr.Error _ as e -> (
-    match Location.error_of_exn e with
-    | None -> Error "Unhandled parse error"
-    | Some (`Ok err) ->
-        Format.kasprintf Result.error "%a" Location.print_report err
-    | Some `Already_displayed -> Error "Already displayed")
-
-type outcome = { stdout : string; stderr : string; output : string; success : bool }
-
-let execute_phrase stdout_tmp_file stderr_tmp_file str =
-  let output_buf = Buffer.create 512 in
-  Buffer.clear output_buf ;
-  let output_fmtr = Format.formatter_of_buffer output_buf in
-  Result.bind (parse_phrase str) @@ fun toplevel_phrase ->
-  try
-    let ((success, stderr), stdout) =
-      capture_stdout stdout_tmp_file @@ fun () ->
-      capture_stderr stderr_tmp_file @@ fun () ->
-      Toploop.execute_phrase true output_fmtr toplevel_phrase
-    in
-    let output = Buffer.contents output_buf in
-    Result.ok { stdout; stderr; output; success }
-  with
-  | Typecore.Error (loc, env, err) ->
-      let report = Typecore.report_error ~loc env err in
-      Format.kasprintf Result.error "%a" Location.print_report report
-  | Env.Error err -> Format.kasprintf Result.error "%a" Env.report_error err
-  | exn ->
-      Format.kasprintf
-        Result.error
-        "Exception caught during phrase evaluation (%s)"
-        (Printexc.to_string exn)
-
-let read_string =
-  Read.bind Read.BE.uint64 @@ fun size -> Read.take (Int64.to_int size)
+let read_string = Read.bind Read.BE.uint64 @@ fun size -> Read.take (Int64.to_int size)
 
 let write_string write msg =
   let len = Int64.of_int @@ String.length msg in
@@ -75,11 +130,33 @@ let write_string write msg =
 
 (* Read one line from [client] and respond with "OK". *)
 let handle_client flow addr =
+  let capture_handle = Capture.create () in
   let stdout_tmp_file_name = Filename.temp_file "forester-ocaml-plugin-stdout" ".tmp" in
   let stderr_tmp_file_name = Filename.temp_file "forester-ocaml-plugin-stderr" ".tmp" in
 
   let () = Toploop.initialize_toplevel_env () in
 
+  let () =
+    Topfind.add_predicates ["byte"];
+    Toploop.add_directive
+      "require"
+      (Toploop.Directive_string
+         (fun str ->
+           let { Capture.stdout; stderr; outcome } =
+             REPL.require capture_handle (REPL.split_words str)
+           in
+           Write.with_flow flow @@ fun writer ->
+           match outcome with
+           | Ok () ->
+               write_string writer stdout ;
+               write_string writer stderr ;
+               write_string writer ""
+           | Error msg ->
+               write_string writer "" ;
+               write_string writer "" ;
+               write_string writer msg))
+      { Toploop.section = "forester_ocaml_plugin_server"; doc = "" }
+  in
   traceln "Accepted connection from %a" Eio.Net.Sockaddr.pp addr ;
   traceln "Using %s as stdout buffer file" stdout_tmp_file_name ;
   traceln "Using %s as stderr buffer file" stderr_tmp_file_name ;
@@ -89,7 +166,10 @@ let handle_client flow addr =
     let input = read_string from_client in
     begin
       Write.with_flow flow @@ fun writer ->
-      match execute_phrase stdout_tmp_file_name stderr_tmp_file_name input with
+      let { Capture.stdout; stderr; outcome } =
+        REPL.execute_phrase capture_handle input
+      in
+      match outcome with
       | Error msg ->
           let stdout = "" in
           let stderr = "" in
@@ -97,10 +177,10 @@ let handle_client flow addr =
           write_string writer stdout ;
           write_string writer stderr ;
           write_string writer output
-      | Ok { stdout; stderr; output; success = _ } ->
+      | Ok (_success, output) ->
           write_string writer stdout ;
           write_string writer stderr ;
-          write_string writer output
+          write_string writer (Buffer.contents output)
     end ;
     loop ()
   in
@@ -118,14 +198,12 @@ let run socket =
     ~on_error:(traceln "Error handling connection: %a" Fmt.exn)
     ~max_connections:1
 
-let usage () =
-  Format.eprintf "usage: `forester_ocaml_plugin_server <port number>`@."
+let usage () = Format.eprintf "usage: `forester_ocaml_plugin_server <port number>`@."
 
 let () =
   match Array.to_list Sys.argv with
   | [] | [_] | _ :: _ :: _ :: _ ->
-      Format.eprintf
-        "forester_ocaml_plugin_server: invalid invocation, exiting@." ;
+      Format.eprintf "forester_ocaml_plugin_server: invalid invocation, exiting@." ;
       usage () ;
       exit 1
   | [_; port] -> (
