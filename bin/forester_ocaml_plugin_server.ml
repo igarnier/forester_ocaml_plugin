@@ -18,7 +18,9 @@ end = struct
   type 'a with_captured = { stdout : string; stderr : string; outcome : 'a }
 
   let capture_fd fd temp_file_name f =
-    let temp_file_fd = Unix.openfile temp_file_name [O_RDWR; O_CREAT; O_TRUNC] 0o640 in
+    let temp_file_fd =
+      Unix.openfile temp_file_name [O_RDWR; O_CREAT; O_TRUNC] 0o640
+    in
     let fd_copy = Unix.dup fd in
     (* Let stdout point to temp file *)
     Unix.dup2 temp_file_fd fd ;
@@ -27,7 +29,9 @@ end = struct
     Unix.fsync temp_file_fd ;
     Unix.dup2 fd_copy fd ;
     ignore (Unix.lseek temp_file_fd 0 SEEK_SET) ;
-    let contents = In_channel.input_all (Unix.in_channel_of_descr temp_file_fd) in
+    let contents =
+      In_channel.input_all (Unix.in_channel_of_descr temp_file_fd)
+    in
     (res, contents)
 
   let capture_stdout stdout_tmp_file_name f =
@@ -37,8 +41,12 @@ end = struct
     capture_fd Unix.stderr stderr_tmp_file_name f
 
   let create () =
-    let stdout_tmp_file = Filename.temp_file "forester-ocaml-plugin-stdout" ".tmp" in
-    let stderr_tmp_file = Filename.temp_file "forester-ocaml-plugin-stderr" ".tmp" in
+    let stdout_tmp_file =
+      Filename.temp_file "forester-ocaml-plugin-stdout" ".tmp"
+    in
+    let stderr_tmp_file =
+      Filename.temp_file "forester-ocaml-plugin-stderr" ".tmp"
+    in
     { stdout_tmp_file; stderr_tmp_file }
 
   let capture { stdout_tmp_file; stderr_tmp_file } f =
@@ -53,7 +61,10 @@ module REPL = struct
   (* code taken from Utop *)
   let split_words str =
     let len = String.length str in
-    let is_sep = function ' ' | '\t' | '\r' | '\n' | ',' -> true | _ -> false in
+    let is_sep = function
+      | ' ' | '\t' | '\r' | '\n' | ',' -> true
+      | _ -> false
+    in
     let rec skip acc i =
       if i = len then acc
       else if is_sep str.[i] then skip acc (i + 1)
@@ -84,7 +95,9 @@ module REPL = struct
   let require handle packages =
     Capture.capture handle @@ fun () ->
     try
-      let eff_packages = Findlib.package_deep_ancestors !Topfind.predicates packages in
+      let eff_packages =
+        Findlib.package_deep_ancestors !Topfind.predicates packages
+      in
       Topfind.load eff_packages ;
       Result.ok ()
     with exn -> handle_findlib_error exn
@@ -95,7 +108,8 @@ module REPL = struct
     with Syntaxerr.Error _ as e -> (
       match Location.error_of_exn e with
       | None -> Error "Unhandled parse error"
-      | Some (`Ok err) -> Format.kasprintf Result.error "%a" Location.print_report err
+      | Some (`Ok err) ->
+          Format.kasprintf Result.error "%a" Location.print_report err
       | Some `Already_displayed -> Error "Already displayed")
 
   let execute_phrase handle str =
@@ -103,7 +117,9 @@ module REPL = struct
     let output_buf = Buffer.create 512 in
     let output_fmtr = Format.formatter_of_buffer output_buf in
     Result.bind (parse_phrase str) @@ fun toplevel_phrase ->
-    try Ok (Toploop.execute_phrase true output_fmtr toplevel_phrase, output_buf) with
+    try
+      Ok (Toploop.execute_phrase true output_fmtr toplevel_phrase, output_buf)
+    with
     | Typecore.Error (loc, env, err) ->
         let report = Typecore.report_error ~loc env err in
         Format.kasprintf Result.error "%a" Location.print_report report
@@ -121,7 +137,8 @@ let traceln fmt = traceln ("forester_ocaml_plugin_server: " ^^ fmt)
 module Read = Eio.Buf_read
 module Write = Eio.Buf_write
 
-let read_string = Read.bind Read.BE.uint64 @@ fun size -> Read.take (Int64.to_int size)
+let read_string =
+  Read.bind Read.BE.uint64 @@ fun size -> Read.take (Int64.to_int size)
 
 let write_string write msg =
   let len = Int64.of_int @@ String.length msg in
@@ -131,13 +148,21 @@ let write_string write msg =
 (* Read one line from [client] and respond with "OK". *)
 let handle_client flow addr =
   let capture_handle = Capture.create () in
-  let stdout_tmp_file_name = Filename.temp_file "forester-ocaml-plugin-stdout" ".tmp" in
-  let stderr_tmp_file_name = Filename.temp_file "forester-ocaml-plugin-stderr" ".tmp" in
+  let stdout_tmp_file_name =
+    Filename.temp_file "forester-ocaml-plugin-stdout" ".tmp"
+  in
+  let stderr_tmp_file_name =
+    Filename.temp_file "forester-ocaml-plugin-stderr" ".tmp"
+  in
 
   let () = Toploop.initialize_toplevel_env () in
 
   let () =
-    Topfind.add_predicates ["byte"];
+    Topfind.add_predicates ["byte"; "toploop"] ;
+    (* Add findlib path so Topfind is available and it won't be
+     initialized twice if the user does [#use "topfind"]. *)
+    Topdirs.dir_directory (Findlib.package_directory "findlib") ;
+
     Toploop.add_directive
       "require"
       (Toploop.Directive_string
@@ -198,12 +223,14 @@ let run socket =
     ~on_error:(traceln "Error handling connection: %a" Fmt.exn)
     ~max_connections:1
 
-let usage () = Format.eprintf "usage: `forester_ocaml_plugin_server <port number>`@."
+let usage () =
+  Format.eprintf "usage: `forester_ocaml_plugin_server <port number>`@."
 
 let () =
   match Array.to_list Sys.argv with
   | [] | [_] | _ :: _ :: _ :: _ ->
-      Format.eprintf "forester_ocaml_plugin_server: invalid invocation, exiting@." ;
+      Format.eprintf
+        "forester_ocaml_plugin_server: invalid invocation, exiting@." ;
       usage () ;
       exit 1
   | [_; port] -> (
