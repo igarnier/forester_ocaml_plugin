@@ -77,29 +77,25 @@ module REPL = struct
     List.rev (skip [] 0)
 
   let handle_findlib_error = function
-    | Failure msg -> Result.error msg
+    | Failure msg -> Format.eprintf "%s\n" msg
     | Fl_package_base.No_such_package (pkg, reason) ->
-        Printf.ksprintf
-          Result.error
+        Printf.eprintf
           "No such package: %s%s\n"
           pkg
           (if reason <> "" then " - " ^ reason else "")
     | Fl_package_base.Package_loop pkg ->
-        Printf.ksprintf Result.error "Package requires itself: %s\n" pkg
+        Printf.eprintf "Package requires itself: %s" pkg
     | exn ->
-        Format.kasprintf
-          Result.error
-          "Exception caught during findlib invocation (%s)"
+        Format.eprintf
+          "Exception caught during findlib invocation (%s)\n"
           (Printexc.to_string exn)
 
-  let require handle packages =
-    Capture.capture handle @@ fun () ->
+  let require packages =
     try
       let eff_packages =
         Findlib.package_deep_ancestors !Topfind.predicates packages
       in
-      Topfind.load eff_packages ;
-      Result.ok ()
+      Topfind.load eff_packages
     with exn -> handle_findlib_error exn
 
   let parse_phrase str =
@@ -118,6 +114,9 @@ module REPL = struct
     let output_fmtr = Format.formatter_of_buffer output_buf in
     Result.bind (parse_phrase str) @@ fun toplevel_phrase ->
     try
+      let toplevel_phrase =
+        Toploop.preprocess_phrase output_fmtr toplevel_phrase
+      in
       Ok (Toploop.execute_phrase true output_fmtr toplevel_phrase, output_buf)
     with
     | Typecore.Error (loc, env, err) ->
@@ -127,7 +126,7 @@ module REPL = struct
     | exn ->
         Format.kasprintf
           Result.error
-          "Exception caught during phrase evaluation (%s)"
+          "Exception caught during phrase evaluation (%s)\n"
           (Printexc.to_string exn)
 end
 
@@ -171,21 +170,7 @@ let handle_client flow addr =
 
     Toploop.add_directive
       "require"
-      (Toploop.Directive_string
-         (fun str ->
-           let { Capture.stdout; stderr; outcome } =
-             REPL.require capture_handle (REPL.split_words str)
-           in
-           Write.with_flow flow @@ fun writer ->
-           match outcome with
-           | Ok () ->
-               write_string writer stdout ;
-               write_string writer stderr ;
-               write_string writer ""
-           | Error msg ->
-               write_string writer "" ;
-               write_string writer "" ;
-               write_string writer msg))
+      (Toploop.Directive_string (fun str -> REPL.require (REPL.split_words str)))
       { Toploop.section = "forester_ocaml_plugin_server"; doc = "" }
   in
   traceln "Accepted connection from %a" Eio.Net.Sockaddr.pp addr ;
@@ -202,11 +187,9 @@ let handle_client flow addr =
       in
       match outcome with
       | Error msg ->
-          let stdout = "" in
-          let stderr = "" in
           let output = Format.asprintf "failed to execute phrase: %s" msg in
-          write_string writer stdout ;
-          write_string writer stderr ;
+          write_string writer "" ;
+          write_string writer "" ;
           write_string writer output
       | Ok (_success, output) ->
           write_string writer stdout ;
