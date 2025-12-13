@@ -33,20 +33,19 @@ let trim_opt str =
   let str = String.trim str in
   if String.length str = 0 then None else Some str
 
-let code_block (snippet : string) (stdout : string option) (output : string option) =
+let code_block (snippet : string) (stdout : string option)
+    (output : string option) =
   let open DSL in
   let maybe_stdout =
     Option.bind stdout @@ fun stdout ->
     Option.bind (trim_opt stdout) @@ fun stdout ->
     Option.some (pre [txt stdout])
   in
-  let maybe_output =
-    Option.map (fun output -> pre [txt output]) output
-  in
+  let maybe_output = Option.map (fun output -> pre [txt output]) output in
   let blocks =
     [pre [txt (String.trim snippet)]]
-    @ (Option.to_list maybe_output)
-    @ (Option.to_list maybe_stdout)
+    @ Option.to_list maybe_output
+    @ Option.to_list maybe_stdout
   in
   p blocks
 
@@ -74,7 +73,9 @@ let plugin : Forester_compiler.Plugin.plugin =
  fun (env, sw) ->
   (* Open log file *)
   let path = Eio.Path.(Eio.Stdenv.cwd env / "forester_ocaml_plugin.log") in
-  let log_flow = Eio.Path.open_out ~sw ~append:true ~create:(`If_missing 0o644) path in
+  let log_flow =
+    Eio.Path.open_out ~sw ~append:true ~create:(`If_missing 0o644) path
+  in
   Write.with_flow log_flow @@ fun log_writer ->
   let logger = log log_writer in
   let net = Eio.Stdenv.net env in
@@ -101,21 +102,25 @@ let plugin : Forester_compiler.Plugin.plugin =
   (* Redirect rest of server stdout to logfile *)
   redirect sw server_stdout server_stderr log_flow ;
 
-  logger @@ Format.asprintf "Connecting to server at %a..." Eio.Net.Sockaddr.pp addr ;
+  logger
+  @@ Format.asprintf "Connecting to server at %a..." Eio.Net.Sockaddr.pp addr ;
   let flow = Eio.Net.connect ~sw net addr in
 
   let parse_options opt =
     match opt with
     | V.Content (T.Content []) -> (false, false)
     | V.Content (T.Content [T.Text text]) ->
-      let opts = String.split_on_char ',' text in
-      let no_stdout = List.mem "no-stdout" opts in
-      let no_echo = List.mem "no-echo" opts in
-      (no_stdout, no_echo)
+        let opts = String.split_on_char ',' text in
+        let no_stdout = List.mem "no-stdout" opts in
+        let no_echo = List.mem "no-echo" opts in
+        (no_stdout, no_echo)
     | _ ->
-      logger @@ Format.asprintf "Expected option formatted as text content, got %a"
-        Forester_core.Value.pp opt ;
-      (false, false)
+        logger
+        @@ Format.asprintf
+             "Expected option formatted as text content, got %a"
+             Forester_core.Value.pp
+             opt ;
+        (false, false)
   in
 
   (* Before trying to connect, wait on server startup to finish. *)
@@ -123,7 +128,7 @@ let plugin : Forester_compiler.Plugin.plugin =
    fun (args : V.t list) ->
     match args with
     | [opt; V.Content (T.Content [T.Text text])] -> (
-        let no_stdout, no_echo = parse_options opt in
+        let (no_stdout, no_echo) = parse_options opt in
         try
           Write.with_flow flow @@ fun to_server ->
           write_string to_server text ;
@@ -137,11 +142,12 @@ let plugin : Forester_compiler.Plugin.plugin =
               (if no_stdout then None else Some captured_stdout)
               (if no_echo then None else Some output)
           in
-          if String.length captured_stderr <> 0 then
-            begin
-              Format.printf "forester_ocaml_plugin: while processing \"%s\"" text;
-              Format.printf "forester_ocaml_plugin: stderr = \"%s\"" captured_stderr
-            end;
+          if String.length captured_stderr <> 0 then begin
+            Format.printf "forester_ocaml_plugin: while processing \"%s\"" text ;
+            Format.printf
+              "forester_ocaml_plugin: stderr = \"%s\""
+              captured_stderr
+          end ;
           Result.ok (V.Content (T.Content [code_block]))
         with End_of_file ->
           logger "End_of_file caught - continuing" ;
