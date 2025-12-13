@@ -123,6 +123,8 @@ module REPL = struct
         let report = Typecore.report_error ~loc env err in
         Format.kasprintf Result.error "%a" Location.print_report report
     | Env.Error err -> Format.kasprintf Result.error "%a" Env.report_error err
+    | Symtable.Error err ->
+        Format.kasprintf Result.error "%a" Symtable.report_error err
     | exn ->
         Format.kasprintf
           Result.error
