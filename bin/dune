@@ -8,4 +8,5 @@
   compiler-libs.toplevel
   forester.compiler
   findlib.top)
- (modes byte))
+ (modes byte)
+ (link_flags -linkall))
