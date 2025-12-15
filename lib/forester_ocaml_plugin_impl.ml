@@ -108,19 +108,20 @@ let plugin : Forester_compiler.Plugin.plugin =
 
   let parse_options opt =
     match opt with
-    | V.Content (T.Content []) -> (false, false)
+    | V.Content (T.Content []) -> (false, false, false)
     | V.Content (T.Content [T.Text text]) ->
         let opts = String.split_on_char ',' text in
         let no_stdout = List.mem "no-stdout" opts in
         let no_echo = List.mem "no-echo" opts in
-        (no_stdout, no_echo)
+        let silent = List.mem "silent" opts in
+        (no_stdout, no_echo, silent)
     | _ ->
         logger
         @@ Format.asprintf
              "Expected option formatted as text content, got %a"
              Forester_core.Value.pp
              opt ;
-        (false, false)
+        (false, false, false)
   in
 
   (* Before trying to connect, wait on server startup to finish. *)
@@ -128,7 +129,7 @@ let plugin : Forester_compiler.Plugin.plugin =
    fun (args : V.t list) ->
     match args with
     | [opt; V.Content (T.Content [T.Text text])] -> (
-        let (no_stdout, no_echo) = parse_options opt in
+        let (no_stdout, no_echo, silent) = parse_options opt in
         try
           Write.with_flow flow @@ fun to_server ->
           write_string to_server text ;
@@ -136,19 +137,24 @@ let plugin : Forester_compiler.Plugin.plugin =
           let captured_stdout = read_string from_server in
           let captured_stderr = read_string from_server in
           let output = read_string from_server in
-          let code_block =
-            code_block
-              text
-              (if no_stdout then None else Some captured_stdout)
-              (if no_echo then None else Some output)
-          in
-          if String.length captured_stderr <> 0 then begin
-            Format.printf "forester_ocaml_plugin: while processing \"%s\"" text ;
-            Format.printf
-              "forester_ocaml_plugin: stderr = \"%s\""
-              captured_stderr
-          end ;
-          Result.ok (V.Content (T.Content [code_block]))
+          if silent then Result.ok (V.Content (T.Content []))
+          else begin
+            let code_block =
+              code_block
+                text
+                (if no_stdout then None else Some captured_stdout)
+                (if no_echo then None else Some output)
+            in
+            if String.length captured_stderr <> 0 then begin
+              Format.printf
+                "forester_ocaml_plugin: while processing \"%s\""
+                text ;
+              Format.printf
+                "forester_ocaml_plugin: stderr = \"%s\""
+                captured_stderr
+            end ;
+            Result.ok (V.Content (T.Content [code_block]))
+          end
         with End_of_file ->
           logger "End_of_file caught - continuing" ;
           Result.ok (V.Content (T.Content [T.Text "End_of_file"])))
